@@ -177,6 +177,17 @@
       <p class="sub">データはこのスマホのこのブラウザの中にだけあります。iPhoneのSafariは、しばらく開かないと消えることがあるので、<b>作業のたびにCSVで書き出し</b>てください。</p>
     </div>
     <div class="card">
+      <h2>読み取りの間隔</h2>
+      <div class="row">
+        <span class="grow">読み取った直後に休む時間</span>
+        <select id="pauseSel" style="font-size:16px;padding:8px;border-radius:8px;border:1px solid var(--line)">
+          <option value="300">0.3秒</option><option value="600">0.6秒（標準）</option>
+          <option value="1000">1.0秒</option><option value="1500">1.5秒</option>
+        </select>
+      </div>
+      <p class="sub">同じ本は、かざし続けている間は数えません。いったん外して約1.5秒たてば、次の1冊として数えます。</p>
+    </div>
+    <div class="card">
       <h2>消去</h2>
       <div class="row">
         <button class="btn red sm" data-clear="tana">棚スキャンを全部消す</button>
@@ -354,15 +365,31 @@ async function loop(){
   loopT = setTimeout(loop, 120);
 }
 
+/* 重複防止：コードごとに「最後に見えた時刻」を覚え、映り続けている間は数えない。
+   本の裏は上段ISBNと下段192の2本が並ぶので、「直前の1本」だけで判定すると交互に入れ替わって数え直してしまう */
+const seen = new Map();          // コード → 最後に見えた時刻
+let pauseUntil = 0;              // 読み取り成功後の待ち（この間は数えない）
+const GAP = 1500;                // 画面から外れてこれだけ経てば、同じコードを次の1冊として数える
 function handle(raw, format, src){
   if (!raw) return;
   const now = Date.now();
-  if (src==="cam" && raw===lastCode && now-lastAt < 2500) { lastAt = now; return; }  // 同じものを写し続けている間は1回
-  if (src==="cam" && tab==="shaken" && S.shaken.current.includes(raw)) return;
+  if (src==="cam"){
+    const prev = seen.get(raw); seen.set(raw, now);
+    if (prev && now-prev < GAP) return;                       // 映り続けている
+    if (now < pauseUntil) return;                             // 読み取り直後の待ち
+    if (tab!=="shaken" && /^19[12]\d{10}$/.test(raw)){       // 下段の書籍JAN
+      const isbnNear = [...seen].some(([c,t]) => /^97[89]/.test(c) && now-t < 2000);
+      if (isbnNear) return;                                   // 上段も見えている → 黙って無視
+    }
+    if (tab==="shaken" && S.shaken.current.includes(raw)) return;
+  }
+  if (seen.size > 300) for (const [c,t] of seen) if (now-t > 10000) seen.delete(c);
   lastCode = raw; lastAt = now;
-  if (tab==="tana") onTana(raw);
-  else if (tab==="henpin") onHenpin(raw);
-  else if (tab==="shaken") onShaken(raw);
+  let ok;
+  if (tab==="tana") ok = onTana(raw);
+  else if (tab==="henpin") ok = onHenpin(raw);
+  else if (tab==="shaken") ok = onShaken(raw);
+  if (ok && src==="cam") pauseUntil = now + (S.pauseMs ?? 600);
 }
 function manualGo(){ const v=$("manual").value.trim(); if(!v) return; handle(v, "manual", "manual"); $("manual").value=""; }
 $("manualBtn").onclick = manualGo;
@@ -391,7 +418,7 @@ function onTana(raw){
   if (ex && $("tanaAdd").checked){ ex.qty++; ex.ts=Date.now(); }
   else if (ex){ beep("dup"); toast("もう読んでいます"); return; }
   else s.items.push({code, type:t, qty:1, ts:Date.now()});
-  save(); beep("ok"); renderTana(code);
+  save(); beep("ok"); renderTana(code); return true;
 }
 function renderTana(hl){
   const s = curTana();
@@ -495,7 +522,7 @@ function onHenpin(raw){
   } else {
     beep("no"); verdict("v-no","対象外　残す", code, t==="book"?"未稼働リストにありません":"書籍のISBNではありません");
   }
-  save(); renderHenpin(code);
+  save(); renderHenpin(code); return true;
 }
 function renderHenpin(hl){
   const h = S.henpin;
@@ -524,7 +551,7 @@ $("hpCsv").onclick = () => {
 function onShaken(raw){
   if (S.shaken.current.includes(raw)) return;
   S.shaken.current.push(raw); save(); beep("ok"); renderShaken();
-  toast(`QR ${S.shaken.current.length}個目を読みました`);
+  toast(`QR ${S.shaken.current.length}個目を読みました`); return true;
 }
 const fieldsHTML = s => '<ol class="fields">' + s.split("/").map(x=>`<li class="code">${esc(x)||'<span class="sub">（空）</span>'}</li>`).join("") + "</ol>";
 function renderShaken(){
@@ -560,6 +587,9 @@ document.querySelectorAll("[data-clear]").forEach(b => b.onclick = () => {
   if (k==="shaken") S.shaken = blank().shaken;
   save(); renderAll(); toast("消去しました");
 });
+
+$("pauseSel").value = String(S.pauseMs ?? 600);
+$("pauseSel").onchange = e => { S.pauseMs = +e.target.value; save(); toast("変更しました"); };
 
 function renderAll(){ renderTana(); renderHenpin(); renderShaken(); renderData(); }
 renderAll();
