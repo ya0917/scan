@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2a36">
+<title>バーコード読取（見本）</title>
+<!-- 読み取り部品：iPhone/Androidどちらでも動く zxing-wasm 版。Androidに標準機能があればそちらを優先 -->
+<script src="https://fastly.jsdelivr.net/npm/barcode-detector@3.2.3/dist/iife/ponyfill.min.js"></script>
+<style>
+  :root{
+    --bg:#f4f5f7; --card:#fff; --ink:#1f2a36; --sub:#6b7480; --line:#dde1e6;
+    --accent:#1f6feb; --hit:#d1242f; --ok:#1a7f37; --warn:#bf8700;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:16px}
+  header{position:sticky;top:0;z-index:10;background:var(--ink);color:#fff;padding:env(safe-area-inset-top) 0 0}
+  .tabs{display:flex}
+  .tabs button{flex:1;background:none;border:0;color:#aeb7c2;padding:12px 4px;font-size:15px;font-weight:600;border-bottom:3px solid transparent}
+  .tabs button.on{color:#fff;border-bottom-color:#58a6ff}
+  main{padding:10px 10px 90px;max-width:640px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+  .cam{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3}
+  .cam video{width:100%;height:100%;object-fit:cover;display:block}
+  .cam .guide{position:absolute;left:8%;right:8%;top:30%;bottom:30%;border:2px solid rgba(255,255,255,.8);border-radius:8px;pointer-events:none}
+  .cam.qr .guide{left:20%;right:20%;top:12%;bottom:12%}
+  .cam .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#ddd;text-align:center;padding:20px;font-size:15px}
+  .cam .flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 14px;font-size:15px;font-weight:600;color:var(--ink)}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.red{color:var(--hit);border-color:#f0b8bb}
+  .btn.sm{padding:6px 10px;font-size:14px}
+  .btn:disabled{opacity:.4}
+  input[type=text],input[type=search]{flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:16px}
+  .grow{flex:1}
+  .sub{color:var(--sub);font-size:13px}
+  h2{font-size:16px;margin:4px 0 8px}
+  .stat{display:flex;gap:16px;font-size:14px;color:var(--sub)}
+  .stat b{font-size:20px;color:var(--ink)}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  td,th{padding:7px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{font-size:12px;color:var(--sub);font-weight:600}
+  td.num{text-align:right;white-space:nowrap}
+  .code{font-family:ui-monospace,Menlo,monospace;font-size:13px;word-break:break-all}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:6px;background:#eef1f4;color:var(--sub);margin-left:4px}
+  .tag.mag{background:#fff3cd;color:#7a5a00}
+  .tag.oth{background:#e8eefc;color:#2a4fa8}
+  .last{animation:hl 1.2s ease-out}
+  @keyframes hl{from{background:#d8ecff}to{background:transparent}}
+  .verdict{border-radius:12px;padding:18px 14px;text-align:center;color:#fff;margin-bottom:10px;min-height:118px;display:flex;flex-direction:column;justify-content:center}
+  .verdict .big{font-size:30px;font-weight:800;letter-spacing:.05em}
+  .verdict .ttl{font-size:16px;margin-top:6px;font-weight:600}
+  .verdict .ext{font-size:13px;margin-top:4px;opacity:.9}
+  .v-idle{background:#8a939d}
+  .v-hit{background:var(--hit)}
+  .v-dup{background:var(--warn)}
+  .v-no{background:var(--ok)}
+  .v-err{background:#57606a}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1f2a36;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;z-index:50;max-width:90%}
+  .toast.show{opacity:.95}
+  .fields{font-size:13px;margin:6px 0 0;padding-left:0;list-style:none;counter-reset:f}
+  .fields li{padding:3px 0;border-bottom:1px dashed var(--line);counter-increment:f}
+  .fields li::before{content:counter(f) ". ";color:var(--sub)}
+  .hide{display:none!important}
+  label.chk{display:flex;gap:6px;align-items:center;font-size:14px}
+  details summary{cursor:pointer;color:var(--accent);font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <nav class="tabs">
+    <button data-tab="tana" class="on">棚スキャン</button>
+    <button data-tab="henpin">返品判定</button>
+    <button data-tab="shaken">車検証</button>
+    <button data-tab="data">データ</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ===== カメラ（3モード共通） ===== -->
+  <section id="camBlock">
+    <div class="cam" id="cam">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="guide"></div>
+      <div class="flash" id="flash"></div>
+      <div class="msg" id="camMsg">「カメラ開始」を押してください</div>
+    </div>
+    <div class="row" style="margin:8px 0 10px">
+      <button class="btn pri grow" id="camBtn">カメラ開始</button>
+      <button class="btn hide" id="torchBtn">ライト</button>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="text" id="manual" inputmode="numeric" placeholder="手入力・Bluetoothスキャナ（Enterで確定）">
+      <button class="btn" id="manualBtn">追加</button>
+    </div>
+  </section>
+
+  <!-- ===== 棚スキャン ===== -->
+  <section data-pane="tana">
+    <div class="card">
+      <div class="row">
+        <input type="text" id="tanaName" placeholder="台・棚の名前（例：フェア台A）">
+        <button class="btn sm" id="tanaNew">新しい台</button>
+      </div>
+      <div class="row" style="margin-top:8px;justify-content:space-between">
+        <div class="stat"><span>点数 <b id="tanaKinds">0</b></span><span>冊数 <b id="tanaQty">0</b></span></div>
+        <label class="chk"><input type="checkbox" id="tanaAdd" checked>同じ本は冊数に足す</label>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2 id="tanaTitle">（台名なし）</h2>
+        <button class="btn sm" id="tanaCsv">CSV書き出し</button>
+      </div>
+      <table><thead><tr><th>コード</th><th class="num">冊</th><th class="num">時刻</th><th></th></tr></thead>
+      <tbody id="tanaBody"></tbody></table>
+      <p class="sub" id="tanaEmpty">まだ読んでいません。本の<b>上段（978…）</b>のバーコードを写してください。</p>
+    </div>
+    <details class="card" id="tanaPast"><summary>過去の台（<span id="tanaPastN">0</span>）</summary><div id="tanaPastList"></div></details>
+  </section>
+
+  <!-- ===== 返品判定 ===== -->
+  <section data-pane="henpin" class="hide">
+    <div class="verdict v-idle" id="verdict">
+      <div class="big" id="vBig">待機中</div>
+      <div class="ttl" id="vTtl">未稼働リストを入れてから、本を写してください</div>
+      <div class="ext" id="vExt"></div>
+    </div>
+    <div class="card">
+      <div class="stat"><span>リスト <b id="hpListN">0</b></span><span>ピック済 <b id="hpPickN">0</b></span><span>読んだ数 <b id="hpScanN">0</b></span></div>
+      <p class="sub" id="hpSrc" style="margin:6px 0 0">未稼働リスト：未取込</p>
+    </div>
+    <div class="card">
+      <h2>未稼働リストの取り込み</h2>
+      <div class="row">
+        <input type="file" id="hpFile" accept=".csv,.txt,text/csv" class="grow">
+      </div>
+      <p class="sub">CSV（Shift_JIS・UTF-8どちらでも可）。ISBNの列は自動で見つけます。書名・出版社などほかの列は判定画面に表示します。取り込み直すと前のリストは置き換わります（ピック記録は残ります）。</p>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2>ピックした本</h2>
+        <button class="btn sm" id="hpCsv">CSV書き出し</button>
+      </div>
+      <table><thead><tr><th>ISBN／書名</th><th class="num">時刻</th><th></th></tr></thead><tbody id="hpBody"></tbody></table>
+    </div>
+  </section>
+
+  <!-- ===== 車検証 ===== -->
+  <section data-pane="shaken" class="hide">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2>この1台で読んだQR：<span id="skN">0</span>個</h2>
+        <button class="btn sm red" id="skClear">やり直し</button>
+      </div>
+      <p class="sub" style="margin:0 0 6px">車検証のQRは複数に分かれています。全部読んでから「保存」を押してください。同じQRは2回入りません。</p>
+      <div id="skCur"></div>
+      <button class="btn pri" id="skSave" style="width:100%;margin-top:8px" disabled>この1台を保存</button>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2>保存した車検証（<span id="skSavedN">0</span>）</h2>
+        <button class="btn sm" id="skCsv">CSV書き出し</button>
+      </div>
+      <div id="skList"></div>
+      <p class="sub">いまは<b>読み取った中身をそのまま</b>保存し、「/」で区切って番号付きで表示しています。どの番号が「車台番号」「登録番号」かの対応づけは、実物で確かめてから入れます。</p>
+    </div>
+  </section>
+
+  <!-- ===== データ ===== -->
+  <section data-pane="data" class="hide">
+    <div class="card">
+      <h2>保存場所</h2>
+      <p class="sub" id="stInfo">確認中…</p>
+      <p class="sub">データはこのスマホのこのブラウザの中にだけあります。iPhoneのSafariは、しばらく開かないと消えることがあるので、<b>作業のたびにCSVで書き出し</b>てください。</p>
+    </div>
+    <div class="card">
+      <h2>消去</h2>
+      <div class="row">
+        <button class="btn red sm" data-clear="tana">棚スキャンを全部消す</button>
+        <button class="btn red sm" data-clear="henpinPick">ピック記録を消す</button>
+        <button class="btn red sm" data-clear="henpinList">未稼働リストを消す</button>
+        <button class="btn red sm" data-clear="shaken">車検証を全部消す</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>読み取りの仕組み</h2>
+      <p class="sub" id="engineInfo">—</p>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+/* ================= 保存 ================= */
+const KEY = "bcscan_v1";
+const blank = () => ({
+  tana:{ sessions:[], currentId:null },
+  henpin:{ list:{}, cols:[], titleCol:null, src:null, picked:[], scans:0 },
+  shaken:{ current:[], records:[] }
+});
+let S;
+try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch(e){ S = blank(); }
+function save(){
+  try { localStorage.setItem(KEY, JSON.stringify(S)); }
+  catch(e){ toast("保存できませんでした（容量不足の可能性）。CSVで書き出してください"); }
+}
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+
+/* ================= 小道具 ================= */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const hhmm = t => { const d=new Date(t); return d.toTimeString().slice(0,5); };
+const stamp = t => { const d=new Date(t), p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+function toast(m){ const t=$("toast"); t.textContent=m; t.classList.add("show"); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove("show"),2200); }
+
+let actx;
+function beep(kind){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    const seq = {ok:[[1800,.07]], hit:[[880,.12],[0,.05],[880,.12],[0,.05],[880,.18]], dup:[[1200,.08],[0,.05],[1200,.08]], err:[[300,.2]], no:[[1500,.06]]}[kind] || [[1500,.06]];
+    let t = actx.currentTime;
+    for (const [f,d] of seq){
+      if (f){ const o=actx.createOscillator(), g=actx.createGain(); o.frequency.value=f; o.type="square";
+        g.gain.value=.08; o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t+d); }
+      t += d;
+    }
+  }catch(e){}
+  if (navigator.vibrate) navigator.vibrate(kind==="hit"?[120,60,120,60,200]:kind==="err"?300:60);
+  const f=$("flash"); f.style.opacity=.6; setTimeout(()=>f.style.opacity=0,80);
+}
+
+function download(name, rows){
+  const csv = rows.map(r => r.map(v => { v = String(v ?? ""); return /[",\n\r]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v; }).join(",")).join("\r\n");
+  const blob = new Blob(["﻿"+csv], {type:"text/csv"});   // BOM付き＝Excelで文字化けしない
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const fileStamp = () => stamp(Date.now()).replace(/[-: ]/g,"").slice(0,12);
+
+/* ================= 書籍コードの判定 ================= */
+function ean13ok(c){ if(!/^\d{13}$/.test(c)) return false;
+  let s=0; for(let i=0;i<12;i++) s += (+c[i])*(i%2?3:1); return (10 - s%10)%10 === +c[12]; }
+function isbn10to13(t){ const b="978"+t.slice(0,9); let s=0; for(let i=0;i<12;i++) s+=(+b[i])*(i%2?3:1); return b+((10-s%10)%10); }
+function normISBN(v){            // CSVの値 → ISBN13（ハイフン・ISBN10も可）
+  const t = String(v||"").toUpperCase().replace(/[^0-9X]/g,"");
+  if (t.length===13 && /^97[89]/.test(t) && ean13ok(t)) return t;
+  if (t.length===10 && /^\d{9}[\dX]$/.test(t)) return isbn10to13(t);
+  return null;
+}
+/* 読んだコードの種類：book=ISBN, mag=雑誌, second=書籍JAN2段目（読み飛ばす）, other */
+function classify(code){
+  const c = String(code).trim();
+  if (/^\d{13}$/.test(c)){
+    if (/^97[89]/.test(c)) return ean13ok(c) ? "book" : "bad";
+    if (/^19[12]/.test(c)) return "second";
+    if (/^49[12]/.test(c)) return "mag";
+    return ean13ok(c) ? "other" : "bad";
+  }
+  const i = normISBN(c); if (i) return "book";
+  return "other";
+}
+const typeTag = t => t==="mag" ? '<span class="tag mag">雑誌</span>' : t==="other" ? '<span class="tag oth">その他</span>' : "";
+
+/* ================= 画面切替 ================= */
+let tab = "tana";
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+function setTab(t){
+  tab = t;
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab===t));
+  document.querySelectorAll("[data-pane]").forEach(p => p.classList.toggle("hide", p.dataset.pane!==t));
+  $("camBlock").classList.toggle("hide", t==="data");
+  $("cam").classList.toggle("qr", t==="shaken");
+  $("manual").placeholder = t==="shaken" ? "QRの中身を貼り付け（Enterで確定）" : "手入力・Bluetoothスキャナ（Enterで確定）";
+  $("manual").inputMode = t==="shaken" ? "text" : "numeric";
+  if (t==="data"){ stopCam(); renderData(); }
+  else if (stream) buildDetector();
+  lastCode = "";
+}
+
+/* ================= カメラと読み取り ================= */
+const BOOK_FORMATS = ["ean_13","ean_8","upc_a","upc_e","code_128","code_39","itf"];
+const QR_FORMATS = ["qr_code"];
+let stream=null, detector=null, loopT=null, busy=false, lastCode="", lastAt=0, engine="";
+async function buildDetector(){
+  const want = tab==="shaken" ? QR_FORMATS : BOOK_FORMATS;
+  // Androidの標準機能があれば優先、なければ zxing-wasm（iPhoneはこちら）
+  if ("BarcodeDetector" in window){
+    try{
+      const sup = await window.BarcodeDetector.getSupportedFormats();
+      const f = want.filter(x => sup.includes(x));
+      if (f.length){ detector = new window.BarcodeDetector({formats:f}); engine="ブラウザ標準"; return; }
+    }catch(e){}
+  }
+  detector = new BarcodeDetectionAPI.BarcodeDetector({formats:want});
+  engine = "zxing-wasm";
+}
+async function startCam(){
+  try{
+    $("camMsg").textContent = "カメラを起動中…";
+    stream = await navigator.mediaDevices.getUserMedia({audio:false,
+      video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}}});
+    const v = $("video"); v.srcObject = stream; await v.play();
+    const track = stream.getVideoTracks()[0];
+    const cap = track.getCapabilities ? track.getCapabilities() : {};
+    if (cap.focusMode && cap.focusMode.includes("continuous"))
+      track.applyConstraints({advanced:[{focusMode:"continuous"}]}).catch(()=>{});
+    $("torchBtn").classList.toggle("hide", !cap.torch);
+    await buildDetector();
+    $("camMsg").classList.add("hide");
+    $("camBtn").textContent = "カメラ停止";
+    loop();
+  }catch(e){
+    stopCam();
+    $("camMsg").classList.remove("hide");
+    $("camMsg").innerHTML = location.protocol!=="https:" && location.hostname!=="localhost"
+      ? "カメラは <b>https</b> のページでしか使えません。<br>ファイルを直接開いている場合は、httpsで公開したURLから開いてください。"
+      : "カメラを使えませんでした。<br>ブラウザのカメラ許可を確認してください。<br><span style='font-size:12px'>"+esc(e.name||e)+"</span>";
+  }
+}
+function stopCam(){
+  clearTimeout(loopT); loopT=null;
+  if (stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  $("video").srcObject = null;
+  $("camBtn").textContent = "カメラ開始";
+  $("camMsg").classList.remove("hide"); $("camMsg").textContent = "「カメラ開始」を押してください";
+  $("torchBtn").classList.add("hide");
+}
+let torchOn=false;
+$("torchBtn").onclick = () => { if(!stream) return; torchOn=!torchOn;
+  stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:torchOn}]}).catch(()=>{}); };
+$("camBtn").onclick = () => {
+  // iPhoneはボタン操作の瞬間に音の準備をしないと、あとで音が出ない
+  try{ actx = actx || new (window.AudioContext||window.webkitAudioContext)(); actx.resume(); }catch(e){}
+  stream ? stopCam() : startCam();
+};
+document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stopCam(); });
+
+async function loop(){
+  if (!stream) return;
+  const v = $("video");
+  if (!busy && detector && v.readyState >= 2){
+    busy = true;
+    try{
+      const res = await detector.detect(v);
+      for (const r of res) handle(r.rawValue, r.format, "cam");
+    }catch(e){}
+    busy = false;
+  }
+  loopT = setTimeout(loop, 120);
+}
+
+function handle(raw, format, src){
+  if (!raw) return;
+  const now = Date.now();
+  if (src==="cam" && raw===lastCode && now-lastAt < 2500) { lastAt = now; return; }  // 同じものを写し続けている間は1回
+  if (src==="cam" && tab==="shaken" && S.shaken.current.includes(raw)) return;
+  lastCode = raw; lastAt = now;
+  if (tab==="tana") onTana(raw);
+  else if (tab==="henpin") onHenpin(raw);
+  else if (tab==="shaken") onShaken(raw);
+}
+function manualGo(){ const v=$("manual").value.trim(); if(!v) return; handle(v, "manual", "manual"); $("manual").value=""; }
+$("manualBtn").onclick = manualGo;
+$("manual").addEventListener("keydown", e => { if (e.key==="Enter"){ e.preventDefault(); manualGo(); } });
+
+/* ================= 棚スキャン ================= */
+function curTana(){ return S.tana.sessions.find(s => s.id===S.tana.currentId); }
+function newTana(name){
+  const s = {id:"T"+Date.now(), name:name||"", started:Date.now(), items:[]};
+  S.tana.sessions.push(s); S.tana.currentId = s.id; save(); return s;
+}
+$("tanaNew").onclick = () => {
+  const s = curTana();
+  if (s && s.items.length && !confirm(`「${s.name||"台名なし"}」を閉じて新しい台を始めます。よろしいですか？\n（前の台は「過去の台」に残ります）`)) return;
+  newTana($("tanaName").value.trim()); $("tanaName").value=""; renderTana();
+};
+$("tanaName").addEventListener("change", () => { const s=curTana(); if (s && !s.items.length){ s.name=$("tanaName").value.trim(); save(); renderTana(); } });
+function onTana(raw){
+  let code = raw.replace(/\s/g,"");
+  const n = normISBN(code); if (n) code = n;
+  const t = classify(code);
+  if (t==="second"){ beep("err"); toast("下段のコードです。上段（978…）を写してください"); return; }
+  if (t==="bad"){ beep("err"); toast("読み違いの可能性があります。もう一度"); return; }
+  const s = curTana() || newTana($("tanaName").value.trim());
+  const ex = s.items.find(i => i.code===code);
+  if (ex && $("tanaAdd").checked){ ex.qty++; ex.ts=Date.now(); }
+  else if (ex){ beep("dup"); toast("もう読んでいます"); return; }
+  else s.items.push({code, type:t, qty:1, ts:Date.now()});
+  save(); beep("ok"); renderTana(code);
+}
+function renderTana(hl){
+  const s = curTana();
+  $("tanaTitle").textContent = s ? (s.name || "（台名なし）") + "　" + hhmm(s.started) + "開始" : "（台名なし）";
+  const items = s ? [...s.items].sort((a,b)=>b.ts-a.ts) : [];
+  $("tanaKinds").textContent = items.length;
+  $("tanaQty").textContent = items.reduce((a,i)=>a+i.qty,0);
+  $("tanaEmpty").classList.toggle("hide", items.length>0);
+  $("tanaBody").innerHTML = items.map(i => `<tr class="${i.code===hl?'last':''}">
+    <td class="code">${esc(i.code)}${typeTag(i.type)}</td>
+    <td class="num"><button class="btn sm" data-q="-1" data-c="${esc(i.code)}">−</button> ${i.qty} <button class="btn sm" data-q="1" data-c="${esc(i.code)}">＋</button></td>
+    <td class="num sub">${hhmm(i.ts)}</td></tr>`).join("");
+  const past = S.tana.sessions.filter(x => x.id!==S.tana.currentId).sort((a,b)=>b.started-a.started);
+  $("tanaPastN").textContent = past.length;
+  $("tanaPastList").innerHTML = past.map(x => `<div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)">
+    <span>${esc(x.name||"台名なし")}<br><span class="sub">${stamp(x.started)}・${x.items.length}点</span></span>
+    <span><button class="btn sm" data-pcsv="${x.id}">CSV</button> <button class="btn sm" data-popen="${x.id}">開く</button></span></div>`).join("") || '<p class="sub">なし</p>';
+}
+$("tanaBody").onclick = e => {
+  const b = e.target.closest("[data-q]"); if (!b) return;
+  const s = curTana(), it = s.items.find(i => i.code===b.dataset.c);
+  it.qty += +b.dataset.q;
+  if (it.qty<=0){ if (confirm(it.code+" を一覧から消しますか？")) s.items = s.items.filter(i=>i!==it); else it.qty=1; }
+  save(); renderTana();
+};
+$("tanaPastList").onclick = e => {
+  const c = e.target.closest("[data-pcsv]"), o = e.target.closest("[data-popen]");
+  if (c) tanaCsv(S.tana.sessions.find(x=>x.id===c.dataset.pcsv));
+  if (o){ S.tana.currentId = o.dataset.popen; save(); renderTana(); toast("この台の続きから読めます"); }
+};
+function tanaCsv(s){
+  if (!s || !s.items.length) return toast("書き出すデータがありません");
+  download(`棚スキャン_${(s.name||"台名なし").replace(/[\\/:*?"<>|]/g,"_")}_${fileStamp()}.csv`,
+    [["台名","開始","コード","種類","冊数","最終読取"],
+     ...s.items.map(i => [s.name, stamp(s.started), i.code, {book:"書籍",mag:"雑誌",other:"その他"}[i.type]||"", i.qty, stamp(i.ts)])]);
+}
+$("tanaCsv").onclick = () => tanaCsv(curTana());
+
+/* ================= 返品判定 ================= */
+async function readText(file){
+  const buf = await file.arrayBuffer();
+  try { return new TextDecoder("utf-8",{fatal:true}).decode(buf).replace(/^﻿/,""); }
+  catch(e){ return new TextDecoder("shift_jis").decode(buf); }
+}
+function parseCSV(text){
+  const rows=[]; let row=[], f="", q=false;
+  for (let i=0;i<text.length;i++){
+    const c=text[i];
+    if (q){ if (c==='"'){ if (text[i+1]==='"'){ f+='"'; i++; } else q=false; } else f+=c; }
+    else if (c==='"') q=true;
+    else if (c===","||c==="\t"){ row.push(f); f=""; }
+    else if (c==="\n"){ row.push(f); rows.push(row); row=[]; f=""; }
+    else if (c!=="\r") f+=c;
+  }
+  if (f!=="" || row.length){ row.push(f); rows.push(row); }
+  return rows.filter(r => r.some(v => v.trim()!==""));
+}
+$("hpFile").onchange = async e => {
+  const file = e.target.files[0]; if (!file) return;
+  const rows = parseCSV(await readText(file));
+  if (!rows.length) return toast("中身が空です");
+  const nc = Math.max(...rows.map(r=>r.length));
+  let best=-1, bestN=0;
+  for (let c=0;c<nc;c++){ const n = rows.filter(r => normISBN(r[c])).length; if (n>bestN){ bestN=n; best=c; } }
+  if (best<0 || bestN < rows.length*0.3) return toast("ISBNの列が見つかりませんでした");
+  const hasHead = !normISBN(rows[0][best]);
+  const head = hasHead ? rows[0].map((h,i)=>h.trim()||("列"+(i+1))) : Array.from({length:nc},(_,i)=>"列"+(i+1));
+  const body = hasHead ? rows.slice(1) : rows;
+  let tc = head.findIndex(h => /書名|タイトル|品名|商品名|title/i.test(h));
+  if (tc<0) tc = head.findIndex((h,i) => i!==best && body.some(r => /[^\x00-\x7f]/.test(r[i]||"")));
+  const list={}; let skip=0;
+  for (const r of body){ const k = normISBN(r[best]); if (!k){ skip++; continue; }
+    list[k] = head.map((_,i)=>(r[i]||"").trim()); }
+  S.henpin.list = list; S.henpin.cols = head; S.henpin.isbnCol = best; S.henpin.titleCol = tc>=0?tc:null;
+  S.henpin.src = {name:file.name, at:Date.now(), n:Object.keys(list).length, skip};
+  save(); renderHenpin(); e.target.value="";
+  toast(`${Object.keys(list).length}件を取り込みました` + (skip?`（ISBNなし${skip}行は除外）`:""));
+};
+function rowInfo(isbn){
+  const r = S.henpin.list[isbn]; if (!r) return {title:"", ext:""};
+  const tc = S.henpin.titleCol, ic = S.henpin.isbnCol;
+  const title = tc!=null ? r[tc] : "";
+  const ext = S.henpin.cols.map((h,i)=> (i===tc||i===ic||!r[i]) ? null : `${h}：${r[i]}`).filter(Boolean).slice(0,4).join("　");
+  return {title, ext};
+}
+function verdict(cls, big, ttl, ext){
+  $("verdict").className = "verdict "+cls; $("vBig").textContent=big; $("vTtl").textContent=ttl||""; $("vExt").textContent=ext||"";
+}
+function onHenpin(raw){
+  const code = normISBN(raw) || raw.replace(/\s/g,"");
+  const t = classify(code);
+  if (t==="second"){ beep("err"); verdict("v-err","上段を写す","下段（192…）のコードを読みました",""); return; }
+  if (!Object.keys(S.henpin.list).length){ beep("err"); verdict("v-err","リスト未取込","先に未稼働リストを取り込んでください",""); return; }
+  S.henpin.scans++;
+  if (S.henpin.list[code]){
+    const {title, ext} = rowInfo(code);
+    const n = S.henpin.picked.filter(p=>p.isbn===code).length;
+    if (n){ beep("dup"); verdict("v-dup",`ピック済（${n}冊目済）`, title||code, "もう1冊抜く場合は下の＋で追加"); }
+    else { beep("hit"); verdict("v-hit","返品対象　抜く", title||code, ext);
+      S.henpin.picked.push({isbn:code, title, ts:Date.now()}); }
+  } else {
+    beep("no"); verdict("v-no","対象外　残す", code, t==="book"?"未稼働リストにありません":"書籍のISBNではありません");
+  }
+  save(); renderHenpin(code);
+}
+function renderHenpin(hl){
+  const h = S.henpin;
+  $("hpListN").textContent = Object.keys(h.list).length;
+  $("hpPickN").textContent = h.picked.length;
+  $("hpScanN").textContent = h.scans;
+  $("hpSrc").textContent = h.src ? `未稼働リスト：${h.src.name}（${stamp(h.src.at)} 取込、${h.src.n}件）` : "未稼働リスト：未取込";
+  $("hpBody").innerHTML = [...h.picked].map((p,i)=>({...p,i})).reverse().map(p => `<tr class="${p.isbn===hl&&Date.now()-p.ts<1500?'last':''}">
+    <td><span class="code">${esc(p.isbn)}</span><br>${esc(p.title)}</td><td class="num sub">${hhmm(p.ts)}</td>
+    <td class="num"><button class="btn sm" data-dup="${p.i}">＋</button> <button class="btn sm red" data-del="${p.i}">×</button></td></tr>`).join("")
+    || '<tr><td colspan="3" class="sub">まだありません</td></tr>';
+}
+$("hpBody").onclick = e => {
+  const d = e.target.closest("[data-del]"), u = e.target.closest("[data-dup]");
+  if (d && confirm("このピック記録を消しますか？")){ S.henpin.picked.splice(+d.dataset.del,1); save(); renderHenpin(); }
+  if (u){ const p = S.henpin.picked[+u.dataset.dup]; S.henpin.picked.push({isbn:p.isbn, title:p.title, ts:Date.now()}); save(); renderHenpin(); toast("1冊追加しました"); }
+};
+$("hpCsv").onclick = () => {
+  const h = S.henpin; if (!h.picked.length) return toast("書き出すデータがありません");
+  const cols = h.cols || [];
+  download(`返品ピック_${fileStamp()}.csv`, [["ピック時刻","ISBN","書名", ...cols.map(c=>"リスト:"+c)],
+    ...h.picked.map(p => [stamp(p.ts), p.isbn, p.title, ...(h.list[p.isbn]||[])])]);
+};
+
+/* ================= 車検証 ================= */
+function onShaken(raw){
+  if (S.shaken.current.includes(raw)) return;
+  S.shaken.current.push(raw); save(); beep("ok"); renderShaken();
+  toast(`QR ${S.shaken.current.length}個目を読みました`);
+}
+const fieldsHTML = s => '<ol class="fields">' + s.split("/").map(x=>`<li class="code">${esc(x)||'<span class="sub">（空）</span>'}</li>`).join("") + "</ol>";
+function renderShaken(){
+  const cur = S.shaken.current;
+  $("skN").textContent = cur.length;
+  $("skSave").disabled = !cur.length;
+  $("skCur").innerHTML = cur.map((c,i)=>`<details ${i===cur.length-1?"open":""}><summary>QR ${i+1}（${c.length}文字）</summary>${fieldsHTML(c)}</details>`).join("");
+  $("skSavedN").textContent = S.shaken.records.length;
+  $("skList").innerHTML = [...S.shaken.records].reverse().map(r => `<details class="card" style="margin:6px 0">
+    <summary>${stamp(r.ts)}・QR ${r.codes.length}個</summary>${r.codes.map((c,i)=>`<div class="sub" style="margin-top:6px">QR ${i+1}</div>${fieldsHTML(c)}`).join("")}</details>`).join("")
+    || '<p class="sub">まだありません</p>';
+}
+$("skSave").onclick = () => { S.shaken.records.push({ts:Date.now(), codes:[...S.shaken.current]}); S.shaken.current=[]; save(); renderShaken(); toast("保存しました"); lastCode=""; };
+$("skClear").onclick = () => { if (S.shaken.current.length && confirm("この1台の読み取りをやり直しますか？")){ S.shaken.current=[]; save(); renderShaken(); lastCode=""; } };
+$("skCsv").onclick = () => {
+  const R = S.shaken.records; if (!R.length) return toast("書き出すデータがありません");
+  const m = Math.max(...R.map(r=>r.codes.length));
+  download(`車検証QR_${fileStamp()}.csv`, [["読取時刻", ...Array.from({length:m},(_,i)=>"QR"+(i+1))], ...R.map(r=>[stamp(r.ts), ...r.codes])]);
+};
+
+/* ================= データ ================= */
+async function renderData(){
+  let s = `使用量：約${Math.ceil((localStorage.getItem(KEY)||"").length*2/1024)}KB`;
+  try{ if (navigator.storage?.persisted) s += (await navigator.storage.persisted()) ? "（消えにくい保存が許可されています）" : "（ブラウザの判断で消える可能性あり）"; }catch(e){}
+  $("stInfo").textContent = s;
+  $("engineInfo").textContent = ("BarcodeDetector" in window ? "このブラウザには標準の読み取り機能があります（優先して使用）。" : "このブラウザには標準の読み取り機能がないため、zxing-wasm を使います。") + (engine?` 現在：${engine}`:"");
+}
+document.querySelectorAll("[data-clear]").forEach(b => b.onclick = () => {
+  const k = b.dataset.clear; if (!confirm(b.textContent+"。元に戻せません。よろしいですか？")) return;
+  if (k==="tana") S.tana = blank().tana;
+  if (k==="henpinPick"){ S.henpin.picked=[]; S.henpin.scans=0; }
+  if (k==="henpinList"){ S.henpin.list={}; S.henpin.cols=[]; S.henpin.src=null; }
+  if (k==="shaken") S.shaken = blank().shaken;
+  save(); renderAll(); toast("消去しました");
+});
+
+function renderAll(){ renderTana(); renderHenpin(); renderShaken(); renderData(); }
+renderAll();
+</script>
+</body>
+</html>
