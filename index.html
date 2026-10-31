@@ -5,8 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1f2a36">
 <title>バーコード読取（見本）</title>
-<!-- 読み取り部品：iPhone/Androidどちらでも動く zxing-wasm 版。Androidに標準機能があればそちらを優先 -->
-<script src="https://fastly.jsdelivr.net/npm/barcode-detector@3.2.3/dist/iife/ponyfill.min.js"></script>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="読取">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<!-- 読み取り部品（同梱）：iPhone/Androidどちらでも動く zxing-wasm 版。Androidに標準機能があればそちらを優先 -->
+<script src="vendor/barcode-detector-ponyfill.js"></script>
 <style>
   :root{
     --bg:#f4f5f7; --card:#fff; --ink:#1f2a36; --sub:#6b7480; --line:#dde1e6;
@@ -58,6 +65,9 @@
   .v-dup{background:var(--warn)}
   .v-no{background:var(--ok)}
   .v-err{background:#57606a}
+  .offbar{background:#bf8700;color:#fff;font-size:12px;text-align:center;padding:3px}
+  .ok-txt{color:var(--ok);font-weight:700} .ng-txt{color:var(--hit);font-weight:700}
+  ol.guide{margin:6px 0 0;padding-left:20px;font-size:14px} ol.guide li{margin:3px 0}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1f2a36;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;z-index:50;max-width:90%}
   .toast.show{opacity:.95}
   .fields{font-size:13px;margin:6px 0 0;padding-left:0;list-style:none;counter-reset:f}
@@ -76,6 +86,7 @@
     <button data-tab="shaken">車検証</button>
     <button data-tab="data">データ</button>
   </nav>
+  <div class="offbar hide" id="offbar">圏外です（オフラインで動いています）</div>
 </header>
 
 <main>
@@ -172,9 +183,25 @@
   <!-- ===== データ ===== -->
   <section data-pane="data" class="hide">
     <div class="card">
+      <h2>オフライン・ホーム画面</h2>
+      <table>
+        <tr><td style="white-space:nowrap">オフライン準備</td><td id="stOffline">確認中…</td></tr>
+        <tr><td style="white-space:nowrap">起動のしかた</td><td id="stLaunch">—</td></tr>
+        <tr><td>通信</td><td id="stNet">—</td></tr>
+        <tr><td>版</td><td id="stVer" class="sub">—</td></tr>
+      </table>
+      <details style="margin-top:8px"><summary>ホーム画面に追加する方法</summary>
+        <p style="margin:8px 0 0;font-weight:700">iPhone（Safari）</p>
+        <ol class="guide"><li>下の「共有」ボタン（□に↑）を押す</li><li>「ホーム画面に追加」を押す</li><li>右上の「追加」を押す</li></ol>
+        <p style="margin:8px 0 0;font-weight:700">Android（Chrome）</p>
+        <ol class="guide"><li>右上の「︙」を押す</li><li>「ホーム画面に追加」または「アプリをインストール」を押す</li></ol>
+        <p class="sub" style="margin-top:8px"><b>iPhoneの注意：</b>ホーム画面のアイコンから開いたときと、Safariで開いたときとでは、<b>データの保存場所が別</b>です。未稼働リストの取り込みも読み取りも、<b>アイコンから開いて</b>行ってください。</p>
+      </details>
+    </div>
+    <div class="card">
       <h2>保存場所</h2>
       <p class="sub" id="stInfo">確認中…</p>
-      <p class="sub">データはこのスマホのこのブラウザの中にだけあります。iPhoneのSafariは、しばらく開かないと消えることがあるので、<b>作業のたびにCSVで書き出し</b>てください。</p>
+      <p class="sub">データはこのスマホの中にだけあります（iPhoneはホーム画面とSafariで別々）。ブラウザの判断で消えることがあるので、<b>作業のたびにCSVで書き出し</b>てください。</p>
     </div>
     <div class="card">
       <h2>読み取りの間隔</h2>
@@ -206,6 +233,13 @@
 
 <script>
 "use strict";
+/* ================= 読み取り部品の置き場所（同梱の .wasm を使う＝ネット不要） ================= */
+try{
+  BarcodeDetectionAPI.prepareZXingModule({ overrides:{
+    locateFile:(path, prefix) => path.endsWith(".wasm") ? new URL("vendor/zxing_reader.wasm", location.href).href : prefix + path
+  }});
+}catch(e){ console.warn("prepareZXingModule", e); }
+
 /* ================= 保存 ================= */
 const KEY = "bcscan_v1";
 const blank = () => ({
@@ -574,6 +608,7 @@ $("skCsv").onclick = () => {
 
 /* ================= データ ================= */
 async function renderData(){
+  renderOffline();
   let s = `使用量：約${Math.ceil((localStorage.getItem(KEY)||"").length*2/1024)}KB`;
   try{ if (navigator.storage?.persisted) s += (await navigator.storage.persisted()) ? "（消えにくい保存が許可されています）" : "（ブラウザの判断で消える可能性あり）"; }catch(e){}
   $("stInfo").textContent = s;
@@ -590,6 +625,39 @@ document.querySelectorAll("[data-clear]").forEach(b => b.onclick = () => {
 
 $("pauseSel").value = String(S.pauseMs ?? 600);
 $("pauseSel").onchange = e => { S.pauseMs = +e.target.value; save(); toast("変更しました"); };
+
+/* ================= オフライン（Service Worker） ================= */
+let swVer = "";
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+async function renderOffline(){
+  let ready = false;
+  try{
+    if (navigator.serviceWorker?.controller){
+      const keys = await caches.keys();
+      for (const k of keys.filter(k => k.startsWith("scan-"))){
+        const c = await caches.open(k);
+        if (await c.match("./vendor/zxing_reader.wasm") && await c.match("./index.html")) { ready = true; break; }
+      }
+    }
+  }catch(e){}
+  $("stOffline").innerHTML = !("serviceWorker" in navigator) ? '<span class="ng-txt">このブラウザは非対応</span>'
+    : ready ? '<span class="ok-txt">完了</span>（圏外でも起動できます）' : '<span class="ng-txt">未完了</span>（電波のある所で一度開き直してください）';
+  $("stLaunch").textContent = isStandalone() ? "ホーム画面のアイコンから" : "ブラウザから（ホーム画面に追加がおすすめ）";
+  $("stNet").textContent = navigator.onLine ? "つながっています" : "圏外";
+  $("stVer").textContent = swVer || "—";
+}
+function netBar(){ $("offbar").classList.toggle("hide", navigator.onLine); if (tab==="data") renderOffline(); }
+window.addEventListener("online", netBar); window.addEventListener("offline", netBar); netBar();
+if ("serviceWorker" in navigator && location.protocol !== "file:"){
+  navigator.serviceWorker.addEventListener("message", e => { if (e.data?.type==="version"){ swVer = e.data.ver; if (tab==="data") renderOffline(); } });
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    navigator.serviceWorker.controller?.postMessage("version");
+    if (hadController) toast("新しい版に入れ替わりました"); else toast("オフラインの準備ができました");
+    hadController = true; if (tab==="data") renderOffline();
+  });
+  navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.controller?.postMessage("version")).catch(e => console.warn("sw", e));
+}
 
 function renderAll(){ renderTana(); renderHenpin(); renderShaken(); renderData(); }
 renderAll();
